@@ -1,0 +1,81 @@
+<html>
+  <head>
+  </head>
+<body>
+<script>
+var RTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection || window.msRTCPeerConnection;
+var RTCSessionDescription = window.RTCSessionDescription || window.mozRTCSessionDescription || window.msRTCSessionDescription;
+var RTCIceCandidate = window.RTCIceCandidate || window.mozRTCIceCandidate || window.msRTCIceCandidate;
+
+var RTCPeerConn = new RTCPeerConnection(
+  {iceServers: [{ 'url': 'stun:stun.services.mozilla.com'}, {'url': 'stun:stun.l.google.com:19302'}]}, 
+  {optional: [{RtpDataChannels: false}]}
+);
+var webSocket = new WebSocket('wss://' + window.location.hostname + ':5000');
+
+var RTCDataChannel;
+var handleError = webSocket.onerror = function(e) { console.log(e); };
+
+var clientId = 'client';
+var farmerId = 'farmer';
+
+var init = function() {
+  webSocket.send(JSON.stringify({
+    inst: 'init', 
+    id: clientId
+  }));
+
+  RTCDataChannel = RTCPeerConn.createDataChannel(clientId+farmerId);
+  RTCDataChannel.onopen = comReady;
+  RTCDataChannel.onerror = handleError;
+
+  RTCPeerConn.createOffer(function(offer) {
+    RTCPeerConn.setLocalDescription(offer, function() {
+      var output = offer.toJSON();
+      if(typeof output === 'string') output = JSON.parse(output); // normalize: RTCSessionDescription.toJSON returns a json str in FF, but json obj in Chrome
+
+      webSocket.send(JSON.stringify({
+        inst: 'send', 
+        peerId: farmerId, 
+        message: output
+      }));
+    }, handleError);
+  }, handleError);
+
+};
+
+RTCPeerConn.ondatachannel = function(event) {
+  RTCDataChannel = event.channel;
+  RTCDataChannel.onopen = comReady;
+  RTCDataChannel.onerror = handleError;
+};
+
+webSocket.onmessage = function(input) {
+  var message = JSON.parse(input.data);
+  if(message.type && message.type === 'answer') {              
+    var answer = new RTCSessionDescription(message);
+    RTCPeerConn.setRemoteDescription(answer, function() {}, handleError);
+  } else if(RTCPeerConn.remoteDescription) {
+    RTCPeerConn.addIceCandidate(new RTCIceCandidate(message.candidate));
+  }
+};
+
+RTCPeerConn.onicecandidate = function (event) {
+  if (!event || !event.candidate) return;
+  webSocket.send(JSON.stringify({
+    inst: 'send',
+    peerId: farmerId,
+    message: {candidate: event.candidate}
+  }));
+};
+
+var comReady = function() {
+  RTCDataChannel.onmessage = function(event) {
+    console.log('RTCDataChannel peer says: ' + event.data);
+  }
+};
+
+webSocket.onopen = init;
+</script>
+</body>
+</html>
